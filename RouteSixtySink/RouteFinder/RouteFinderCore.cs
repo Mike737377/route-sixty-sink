@@ -69,9 +69,6 @@ namespace RouteSixtySink.Core
 
             foreach (TypeDef type in module.GetTypes())
             {
-                List<Dictionary<string, dynamic>> routeDataList = new() { };
-                string typeFullName = type.GetFullTypeNameCleaned();
-
                 if (!IsController(type)) { continue; }
 
                 if (!assemblySeen)
@@ -80,7 +77,9 @@ namespace RouteSixtySink.Core
                     assemblySeen = true;
                     Logger.Verbose("assembly", assemblyClean);
                 }
-
+                
+                List<Dictionary<string, dynamic>> routeDataList = new() { };
+                string typeFullName = type.GetFullTypeNameCleaned();
                 Logger.Verbose("c", typeFullName);
 
                 // Parse Class-level attributes, such as [Authorize] to determine role constraints

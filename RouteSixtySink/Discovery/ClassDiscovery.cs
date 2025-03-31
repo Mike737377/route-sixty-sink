@@ -14,6 +14,7 @@ namespace RouteSixtySink.Discovery
 
         private static Dictionary<string, string> Results { get; set; }
         public static Dictionary<string, Tuple<string, TypeDef>> ClassNameToTypeDef { get; set; } // Dictionary<ClassName, (DLLName the class is from, TypeDef pointing to type)>
+        public static Dictionary<string, HashSet<Tuple<string, TypeDef>>> InterfaceToTypeDefs { get; set; }
         public static Dictionary<string, bool> MethodExploredDict { get; set; } // Dictionary<ClassMethod Name, hasBeenExplored?>
         public static Dictionary<string, Tuple<List<List<string>>, Dictionary<string, string>>> MethodSinkDict { get; set; } // Dictionary<ClassMethod Name, routeToSink linked list>
         public static HashSet<string> MissingClasses { get; set; }
@@ -73,11 +74,28 @@ namespace RouteSixtySink.Discovery
             return ret;
         }
 
+        public static TypeDef GetTypeFromInterface(string interfaceName)
+        {
+            TypeDef ret;
+            try
+            {
+                ret = InterfaceToTypeDefs[interfaceName].First().Item2;
+            }
+            catch
+            {
+                MissingClasses.Add(interfaceName);
+                return null;
+            }
+
+            return ret;
+        }
+
         public static void Discover(List<string> Assemblies)
         {
             List<string> assembliesCopy = new();
             assembliesCopy.AddRange(Assemblies);
             ClassNameToTypeDef = new Dictionary<string, Tuple<string, TypeDef>>();
+            InterfaceToTypeDefs = new Dictionary<string, HashSet<Tuple<string, TypeDef>>>();
             MethodExploredDict = new Dictionary<string, bool>();
             MethodSinkDict = new Dictionary<string, Tuple<List<List<string>>, Dictionary<string, string>>>();
             MissingClasses = new HashSet<string>();
@@ -116,7 +134,22 @@ namespace RouteSixtySink.Discovery
                         if (type.FullName == "<Module>") { continue; }
                         try
                         {
-                            ClassNameToTypeDef.Add(type.FullName, new Tuple<string, TypeDef>(assembly, type));
+                            var typeTuple = new Tuple<string, TypeDef>(assembly, type);
+                            ClassNameToTypeDef.Add(type.FullName, typeTuple);
+                            if (type.HasInterfaces)
+                            {
+                                foreach (var interfaceImpl in type.Interfaces)
+                                {
+                                    var interfaceName = interfaceImpl.Interface.ScopeType.FullName;
+                                    if (!InterfaceToTypeDefs.TryGetValue(interfaceName, out var typeSet))
+                                    {
+                                        typeSet = new();
+                                        InterfaceToTypeDefs.Add(interfaceName, typeSet);
+                                    }
+
+                                    typeSet.Add(typeTuple);
+                                }
+                            }
                         }
                         catch (Exception e)
                         {

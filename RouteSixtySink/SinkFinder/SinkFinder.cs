@@ -11,6 +11,8 @@ using System.Text.RegularExpressions;
 using RouteSixtySink.Outputters;
 using RouteSixtySink.Helpers;
 using RouteSixtySink.Discovery;
+using RouteSixtySink.Indirection;
+
 namespace RouteSixtySink.SinkFinder
 {
     public static class SinkFinder
@@ -52,6 +54,8 @@ namespace RouteSixtySink.SinkFinder
                 var json = File.ReadAllText(SinkFile);
                 Config = JsonConvert.DeserializeObject<SinkConfig>(json);
             }
+
+            //var indirections = IndirectionDiscovery.Run();
             SinkFinder.FindRouteToMethodRecursively(methodName, type, ref routeToMethod, 0);
             return Sinks;
         }
@@ -180,13 +184,15 @@ namespace RouteSixtySink.SinkFinder
         private static bool IsMethodSink(TypeDef type, string methodName, ref List<string> routeToMethod, dnlib.DotNet.Emit.Instruction instr)
         {
             bool sinksFound = false;
+            var method = instr.Operand.ToString().ToLower();
+            
             foreach (var sink in Config.Sinks)
             {
                 // Regex sink matching
                 if (sink.ContainsKey("regex") && sink["regex"].ToLower() == "true")
                 {
                     Regex regex = new(sink["sink"].ToLower());
-                    Match match = regex.Match(instr.Operand.ToString().ToLower());
+                    Match match = regex.Match(method);
                     if (match.Success)
                     {
                         sinksFound = true;
@@ -195,7 +201,7 @@ namespace RouteSixtySink.SinkFinder
                 }
 
                 // Regular sink matching
-                else if (instr.Operand.ToString().ToLower().Contains(sink["sink"].ToLower()))
+                else if (method.Contains(sink["sink"].ToLower()))
                 {
                     sinksFound = true;
                     ReportSink(type.FullName, methodName, routeToMethod, sink, instr, true);
@@ -245,6 +251,12 @@ namespace RouteSixtySink.SinkFinder
                     string className = ClassDiscovery.FullNameToClassName(classMethodName);
                     // Recurse!
                     TypeDef nextType = ClassDiscovery.GetType(className);
+                    
+                    if (nextType is not null && nextType.IsInterface)
+                    {
+                        nextType = ClassDiscovery.GetTypeFromInterface(className);
+                        classMethodName = nextType is not null ? classMethodName.Replace($" {className}", $" {nextType.FullName}") : classMethodName;
+                    }
 
                     if (nextType != null)
                     {
@@ -257,10 +269,38 @@ namespace RouteSixtySink.SinkFinder
             }
         }
 
+        private static readonly string[] callOpcodes = { "call", "calli", "callvirt", "newobj" };
+        
         public static string GetClassMethodCall(dnlib.DotNet.Emit.Instruction instr)
         {
-            string[] callOpcodes = { "call", "calli", "callvirt", "newobj" };
-            return callOpcodes.Contains(instr.OpCode.ToString()) ? instr.Operand.ToString() : null;
+            if (!callOpcodes.Contains(instr.OpCode.ToString())) return null;
+
+            var ilRef = instr.Operand as IMemberRef;
+
+            if (ilRef is null) return instr.Operand.ToString();
+            
+            var callName = ilRef.FullName;
+
+            if (ilRef.IsMethodSpec)
+            {
+                var methodSpec = (MethodSpec)ilRef;
+                var typeDef = ClassDiscovery.GetType(methodSpec.DeclaringType.FullName);
+                return typeDef?.IsInterface ?? false 
+                    ? callName.Replace($"::{ilRef.Name}", $"::{typeDef.FullName}.{methodSpec.Name}")
+                    : callName;
+            }
+
+            if (ilRef.IsMemberRef)
+            {
+                var typeDef = ClassDiscovery.GetType(ilRef.DeclaringType.GetNonNestedTypeRefScope().ReflectionFullName);
+                var methodDef = typeDef.ResolveMethod((MemberRef)ilRef);
+
+                return typeDef?.IsInterface ?? false 
+                    ? methodDef.FullName.Replace($"::{ilRef.Name}", $"::{typeDef.FullName}.{methodDef.Name}")
+                    : callName;
+            }
+
+            return callName;
         }
     }
 
